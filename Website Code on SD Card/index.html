@@ -34,6 +34,7 @@
             <button class="tablink" onclick="openPage('pyrolysis', this, 'green')" id="defaultOpen">Pyrolsis Reactor</button>
             <button class="tablink" onclick="openPage('bioreactor', this, 'green')">Bioreactor</button>
             <button class="tablink" onclick="openPage('chemreactor', this, 'green')">Chemical Deconstruction Reactor</button>
+            <button class="tablink" onclick="openPage('sequencing', this, 'green')">Sequencing</button>
             <!-- <button class="tablink" onclick="openPage('post-process', this, 'green')">post-processing</button> -->
         </nav>
         <div id="pyrolysis" class="tabcontent">
@@ -634,6 +635,12 @@
                 <button id="chem-thermo-tracking" onclick="setTracking('chem-thermo-tracking', 'chem-thermo-tracking-amount', 'chem-thermo-graph')">Track Data</button>        
             </div>
         </div>
+
+        <div id="sequencing" class="tabcontent">
+            <h2>Bioreactor Sequencing</h2>
+            <!-- Sequencing content will go here -->
+        </div>
+
     <script src="js/plotly.js"></script>
     <script src="js/tabbing.js"></script>
     <script>
