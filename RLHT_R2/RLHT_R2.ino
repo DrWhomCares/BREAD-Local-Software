@@ -20,6 +20,12 @@
 long lastThermoRead = 0;
 long lastSerialPrint = 0;
 
+//auto tuning variables
+uint8_t checkOsc = 0;
+uint8_t peak = 0;
+hw_timer_t *timer = NULL;
+float bio_auto[6] = {0,0,0,0,0,0}; // {maxTemp, prevTemp, prevTime, Peak1, prevDeriv, setpoint}
+
 //Edit these offsets to calibrate thermocouples as needed
 double thermo1_offset = 4.0;
 double thermo2_offset = 4.0;
@@ -48,7 +54,7 @@ struct RLHT_t
   double thermo1;   // thermocouple 1 measurement
   double thermo2;
   char thermoSelect[2];   // select which thermocouples pair with relays {relay1, relay2}
-} RLHT, RLHT_old;
+} RLHT, RLHT_old, RLHT_auto;
 
 union FLOATUNION_t //Define a float that can be broken up and sent via I2C
 {
@@ -85,6 +91,11 @@ void estop()
     RLHT.heatSetpoint_2 = 0;
     RLHT.rOnTime_1 = 0;
     RLHT.rOnTime_2 = 0;
+
+    RLHT_auto.heatSetpoint_1 = 0;
+    RLHT_auto.heatSetpoint_2 = 0;
+    RLHT_auto.rOnTime_1 = 0;
+    RLHT_auto.rOnTime_2 = 0;
 
     digitalWrite(RELAY1, LOW);
     digitalWrite(RELAY2, LOW);
@@ -174,6 +185,116 @@ void loop() {
 
     actuateRelays();
     printOutput();
+  }
+}
+void autoTune(){
+  float tmp = bio_post_heater_pid[1][1];
+  Serial.print("Current Kp: ");
+  Serial.println(tmp);
+  Serial.print("time");
+  Serial.println(time);
+  Serial.println("temp: ");
+  Serial.println(temp);
+  Serial.print("setpoint: ");
+  Serial.println(setpoint);
+  Serial.println("temp bio: ");
+  for (int i = 0; i < 4; i++)
+    {
+      Serial.print(bio_thermo_val[i]);
+      Serial.print(" ");
+    }
+  Serial.println();
+  if(bio_auto[2] == 0 && autoCheck == 1)
+  {
+    Serial.println("Time set");
+    bio_auto[2] = time;
+  }
+//we could just increase the gain super slowly
+  if (autoCheck == 1 && time - bio_auto[2] > 20)
+  {
+    //((current T - previous T) / (current time - previous timee))
+    double driv = (temp - bio_auto[1])/(time - bio_auto[2]);
+    
+    Serial.print("currentTemp: ");
+    Serial.println(temp);
+    Serial.print("Deriv: ");
+    Serial.println(driv);
+    Serial.print("prevDeriv: ");
+    Serial.println(bio_auto[4]);
+    Serial.print("setpoint: ");
+    Serial.println(setpoint);
+    Serial.print("Max Temp: ");
+    Serial.println(bio_auto[0]);
+    
+    //if T is less than 2% of Setpoint and the derivative is decreasing and it isn't oscillating...
+    if ((temp < setpoint - (setpoint * 0.02)) && driv < 0.02 && checkOsc == 0)
+    {
+        //double Ku and send new gains
+        bio_post_heater_pid[1][1] = Ku * 2;
+        RLHTCommandPID(address, heater, bio_post_heater_pid[1][1], 0, 0);
+        Serial.print("Kp Change: ");
+        Serial.println(bio_post_heater_pid[1][1]); 
+    }
+    else if(temp > setpoint || checkOsc == 1)
+    {
+      //check for oscillations
+      checkOsc = 1;
+      //If MaxTemp is less than current temp, set new peak 1 max and continue
+      if(bio_auto[0] < temp)
+      {
+        bio_auto[0] = temp;
+      }
+      //If previous T is smaller than current, set new maximum T
+      else if(bio_auto[1] < temp){
+        //increasing to peak 2
+        bio_auto[0] = temp;
+      }
+      //If max observed T is larger than new and we have not found the first peak, set it as the first peak
+      if(bio_auto[0] > temp && peak == 0){
+        bio_auto[3] = bio_auto[0];
+        bio_auto[0] = 0;
+        peak = 1;
+        Serial.println("first peak");
+        timerRestart(timer);
+        bio_auto[2] = 0;
+        Serial.println("time reset");
+      }
+      //If max observed T is larger than new and we have found the first peak...
+      else if (bio_auto[0] > temp && peak == 1){
+        //Find the delta between the secondpeak-firstpeak
+        float delp = bio_auto[0]-bio_auto[3];
+        Serial.print("peak 1 temp: ");
+        Serial.println(bio_auto[3]);
+        Serial.print("delp: ");
+        Serial.println(delp);
+        //If the delta is greater than 0, change Ku
+        if(delp > 0){
+          bio_post_heater_pid[1][1] = (Ku / 1.5); //or Ku - (Ku/2)
+          RLHTCommandPID(address, heater,bio_post_heater_pid[1][1],0,0);
+        }
+        else{
+          float time = timerReadSeconds(timer);
+          //reset Command
+          RLHTCommandPID(address, heater, 0, 0, 0);
+          //add values to
+          bio_heater_auto_pid_vals[0] = 0.6*bio_post_heater_pid[1][1];
+          bio_heater_auto_pid_vals[1] = (1.2*bio_post_heater_pid[1][1])/time;
+          bio_heater_auto_pid_vals[2] = 0.075*bio_post_heater_pid[1][1]*time;
+          checkOsc = 0;
+          autoCheck = 0;
+          timerStop(timer);
+          bio_auto[2] = 0;
+          Serial.println("hit");
+        }
+      }
+    }
+    // if(bio_auto[2] != 0){
+    //   bio_auto[2] = time;
+    // }
+    //saving old time, temp, and dericative
+    bio_auto[1] = temp;
+    bio_auto[2] = time;
+    bio_auto[4] = driv;
   }
 }
 
@@ -358,6 +479,17 @@ void setParametersRLHT(char *in_data)
         RLHT.Kp_2 = (double)float1.number;
         RLHT.Ki_2 = (double)float2.number;
         RLHT.Kd_2 = (double)float3.number;
+      }
+     case 'A':
+      for(int i=0; i<4; i++){
+        float1.bytes[i] = in_data[i+2];
+        float2.bytes[i] = in_data[i+6];
+        float3.bytes[i] = in_data[i+10];
+      }
+      if(in_data[1] == 1){
+        RLHT_auto.heatSetpoint_1 = float1.number;
+        RLHT_auto.Ku_1 = float2.number;
+        RLHT_auto.tau_1 = float3.number;
       }
       break;
   }

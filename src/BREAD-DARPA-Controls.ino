@@ -816,6 +816,22 @@ void RLHTCommandPIDAuto(int address, byte heater, float Ku,float setpoint, float
   }
 }
 
+void RLHTCommandAuto(int address, byte heater,  float setpoint, byte thermocouple, bool enableReverse){
+  FLOATUNION_t setAuto;
+  setAuto.number = setpoint;
+  Wire.beginTransmission(address);
+  Wire.write('A');
+  Wire.write(heater);
+  for(int i=0; i<4; i++){
+    Wire.write(setAuto.bytes[i]);              // sends one byte
+  }
+  Wire.write(thermocouple);
+  Wire.write(enableReverse);
+  Wire.endTransmission();    // stop transmitting
+  
+  
+
+}
 
 void RLHTCommandPID(int address, byte heater, float Kp_set, float Ki_set, float Kd_set)
 {
